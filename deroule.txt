@@ -1,0 +1,77 @@
+|1 2|    |2|
+|3 4|  = |2|
+
+
+| x + 2y  = 2
+| 3x + 4y = 2
+
+eps = 0.5
+
+x = {1, 1}
+
+conv = 0
+#i = 1 
+ c = 2
+ #j = 1
+ #j = 2
+    c = 2 - 2{= a12} * 1{x2} = 0
+ c = 0 / 1{= a11} = 0
+ conv = max(0, abs(1{x1} - 0{c})) = 1
+ x1 = c {= 0}
+#i = 2
+ c = 2
+ #j = 1
+    c = c{=2} - 3{a21} * 0{x1} = 2
+ #j = 2
+ c <- 2 / 4{aii} = 0.5
+ conv = max(1{conv}, abs(1{x2} - 0.5{c})) = 1
+ x2 <- 0.5{c}
+#finboucle
+~conv < eps ? 1 < 0.5 => false
+conv = 0
+#i = 1
+   c = 2{bi}
+   #j = 1
+   #j = 2
+      c = 2 - 2{a12} * 0.5{x2} = 1
+   c = 1 / 1{a11} = 1
+   conv = max(0, {0 - 1}) = 1
+   x1 = 1
+#i = 2
+   c = 2{bi}
+   #j = 1
+      c = 2 - 3{a21} * 1{x1} = -1
+   #j = 2
+   c <- -1 / 4 = -0.25
+   conv = max(1, 0.5 - -0.25) = 1
+   x2 = -0.25
+~conv < eps ? 1 < 0.5 => false
+conv = 0
+#i = 1
+   c = 2
+   #j=1
+   #j=2
+	c = 2 - 2 * -0.25 = 2 - 2 * - 1/4 = 2 + 0.5 = 2.5
+   c = 2.5 / 1 = 2.5
+   conv = max(0, abs(1 - 2.5)) = 1.5
+
+
+
+- un boucle externe
+- n boucles internes => ce qu'on va parallèlisé
+
+chaque boucle a besoin de :
+- la matrice A
+  on a besoin du vecteur A_i (moins un élément)
+
+- le vecteur x au complet
+  problème : le vecteur x est modifié par les processus d'avant.
+  solution : on inverse l'ordre de la boucle
+
+chaque boucle doit renvoyer
+conv => on peut le passer aux autres lorsque l'on remonte les résultats
+le nouveau x_i
+
+
+algo : 
+

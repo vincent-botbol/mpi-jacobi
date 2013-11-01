@@ -1,0 +1,8 @@
+
+- Random pas reentrant
+
+- mpi_gather
+
+
+- On est quasi-sûr de pouvoir résoudre la matrice puisqu'elle est
+  diagonallyDominant
