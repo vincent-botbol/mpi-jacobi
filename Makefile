@@ -1,11 +1,12 @@
 CC=mpicc
+CFLAGS=-O3
 
 TARGET=jacobi
 
 all: $(TARGET)
 
-% : %.c
-	$(CC) -o $@ $<
+$(TARGET) : $(TARGET).c
+	$(CC) $(CFLAGS) -o $@ $<
 
 clean:
 	rm -f $(TARGET) *~ *.o
