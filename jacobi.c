@@ -84,6 +84,7 @@ void generateRandomDiagonallyDominantMatrix(double *A, int n, int h, int hM) {
     if (my_rank == MASTER)
       A[i * n + i] = 2.0 + randomDoubleInDomain(1.0);
     else
+      // pas sûr de l'indice, à revoir
       A[i * n + i + hM + h * (my_rank-1) ] = 2.0 + randomDoubleInDomain(1.0);
   }
 }
@@ -175,12 +176,14 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
     for (i=0;i< h; i++) {
       c = b[i];
       for (j=0;j<n;j++) {
-	if (i != j) {
+	// pas sûr de la valeur de i: à vérif
+	if (i + (my_rank==MASTER?0:hM) + my_rank * h != j) {
 	  c -= A[i * n + j] * x[j];
 	}
       }
       c /= A[i * n + i];
-      d = fabs(x[i] - c);
+      // pas sûr de la valeur de i: à vérif
+      d = fabs(x[i + (my_rank==MASTER?0:hM) + my_rank * h] - c);
       if (d > delta) delta = d;
       xp[i] = c;
     }
