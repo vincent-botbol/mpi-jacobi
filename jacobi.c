@@ -16,6 +16,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <mpi.h>
+#include <string.h>
 
 /* Some constants */
 #define DEFAULT_PROBLEM_SIZE  1024
@@ -83,9 +84,9 @@ void generateRandomDiagonallyDominantMatrix(double *A, int n, int h, int hM) {
     }
     if (my_rank == MASTER)
       A[i * n + i] = 2.0 + randomDoubleInDomain(1.0);
-    else
-      // pas sûr de l'indice, à revoir
+    else{
       A[i * n + i + hM + h * (my_rank-1) ] = 2.0 + randomDoubleInDomain(1.0);
+    }
   }
 }
 
@@ -172,45 +173,56 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
     iter++;
     delta = 0.0;
     
+    
     /* faire le calcul sur sa partie de la matrice */
-    for (i=0;i< h; i++) {
+    for (i=0;i< (my_rank==MASTER?hM:h); i++) {
       c = b[i];
+      
+      int i2 = 
+	(my_rank==MASTER?0:hM) + //décalage de HMaitre 
+	(my_rank==MASTER?0:(my_rank - 1) * h) + 
+	i;
+      
       for (j=0;j<n;j++) {
 	// pas sûr de la valeur de i: à vérif
-	if (i + (my_rank==MASTER?0:hM) + my_rank * h != j) {
+	if (i2 != j) {
 	  c -= A[i * n + j] * x[j];
 	}
       }
-      c /= A[i * n + i];
+
+      c /= A[i * n + i2]; // colonne i2
+      if (A[i * n + i2] == 0.0){	
+	printf("PAS NORMAL, proc %d i = %d n = %d i2 = %d adr = %d h = %d hM = %d\n",my_rank, i, n, i2, i * n + i2, h, hM);
+      }
+      
       // pas sûr de la valeur de i: à vérif
-      d = fabs(x[i + (my_rank==MASTER?0:hM) + my_rank * h] - c);
+      d = fabs(x[i2] - c);
       if (d > delta) delta = d;
       xp[i] = c;
     }
-    /*  
-	xt = xPrev;
-	xPrev = xNew; 
-	xNew = xt;
-    */
+
     convergence = (delta < eps);
 
     if (my_rank == MASTER) {
       MPI_Status status;
-      int tmp_conv;
       for (i = 1; i < world_size; i++){
 	MPI_Probe(MPI_ANY_SOURCE , TAG_SUBVECTOR, MPI_COMM_WORLD, &status);
 	int id_source = status.MPI_SOURCE;
-	/* matrice + décalage du bout du maitre + rank * taille bout esclave */
+	/* vecteur + décalage du bout du maitre + (rank - 1 (puisqu'on
+	   a inclut le maitre)) * taille bout esclave */
 	MPI_Recv(x + hM + (id_source - 1) * h,
-		 n * h, MPI_DOUBLE, 
+		 h, MPI_DOUBLE, 
 		 id_source, TAG_SUBVECTOR, MPI_COMM_WORLD, &status);
       }
+      
+      // recopie du xp local au master
+      memcpy(x, xp, sizeof(double)*hM);
     }
     else {
       MPI_Send(xp, h, MPI_DOUBLE, MASTER, TAG_SUBVECTOR, MPI_COMM_WORLD);
     }
     
-    /* Met à jour le vecteur x */
+    /* màj du vecteur x */
     MPI_Bcast(x, n, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
     
     /* Applique un "et logique" aux convergences de tous les process et stocke
@@ -250,7 +262,7 @@ int main(int argc, char *argv[]) {
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   
   // h = partie entière (n / world_size)
-
+  
   /* h : hauteur de la matrice  */
   int xN = n / world_size, h;
   double xR = (double)n / (double)world_size;
@@ -272,7 +284,6 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  
   /* sous-vecteur résultat pour chaque processus 
      -modifié-
    */
@@ -324,15 +335,13 @@ int main(int argc, char *argv[]) {
   generateRandomDiagonallyDominantMatrix(A, n, my_rank==MASTER?hM:h, hM);
   generateRandomVector(b, my_rank==MASTER?hM:h);
 
-  /* FIN MODIF */
-
   /* Perform Jacobi iteration 
      Time this (interesting) part of the code.
   */
   gettimeofday(&before, NULL);
   x = jacobiIteration(x_vect, x_vect_modif, A, b, JACOBI_EPS, n, JACOBI_MAX_ITER, h, hM);
   gettimeofday(&after, NULL);
-
+  
   /* Compute the residual */
   computeResidual(r, A, x, b, n, my_rank==MASTER?hM:h);
 
@@ -342,12 +351,11 @@ int main(int argc, char *argv[]) {
   double tmp_maxAbsRes;
   MPI_Reduce(&maxAbsRes, &tmp_maxAbsRes, 1, MPI_DOUBLE, 
 	     MPI_MAX, MASTER, MPI_COMM_WORLD);
-
+  
   if (my_rank == MASTER){
-    maxAbsRes = MAX(maxAbsRes, tmp_maxAbsRes);
+    maxAbsRes = tmp_maxAbsRes;
   }
-  /* Envoi par les esclaves des max résidus et TERMINAISON des
-     esclaves */
+  /* TERMINAISON des esclaves */
   else {
     goto free_zone;
   }
