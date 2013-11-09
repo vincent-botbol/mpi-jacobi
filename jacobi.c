@@ -41,6 +41,7 @@
 // Global vars
 int my_rank;
 int world_size;
+MPI_Status status;
 
 /* Compute time differences in seconds */
 double computeTimeDifferenceInSeconds(struct timeval *before, struct timeval *after) {
@@ -82,11 +83,7 @@ void generateRandomDiagonallyDominantMatrix(double *A, int n, int h, int hM) {
     for (j=0;j<n;j++) {
       A[i * n + j] = randomDoubleInDomain(absMax);
     }
-    if (my_rank == MASTER)
-      A[i * n + i] = 2.0 + randomDoubleInDomain(1.0);
-    else{
-      A[i * n + i + hM + h * (my_rank-1) ] = 2.0 + randomDoubleInDomain(1.0);
-    }
+    A[i * n + i + (my_rank == MASTER?0:hM + h * (my_rank-1)) ] = 2.0 + randomDoubleInDomain(1.0);
   }
 }
 
@@ -169,6 +166,7 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
     x[i] = 1.0;
   }
 
+  iter = 0;
   do {
     iter++;
     delta = 0.0;
@@ -191,9 +189,6 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
       }
 
       c /= A[i * n + i2]; // colonne i2
-      if (A[i * n + i2] == 0.0){	
-	printf("PAS NORMAL, proc %d i = %d n = %d i2 = %d adr = %d h = %d hM = %d\n",my_rank, i, n, i2, i * n + i2, h, hM);
-      }
       
       // pas sûr de la valeur de i: à vérif
       d = fabs(x[i2] - c);
@@ -202,6 +197,8 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
     }
 
     convergence = (delta < eps);
+
+    if (world_size == 1) continue;
 
     if (my_rank == MASTER) {
       MPI_Status status;
@@ -227,8 +224,118 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
     
     /* Applique un "et logique" aux convergences de tous les process et stocke
        le résultat dans convergence */
-    MPI_Allreduce (&convergence, &convergence, 1, MPI_INT,
-                   MPI_LAND, MPI_COMM_WORLD);
+    double tmp = 0.0;
+    MPI_Allreduce (&convergence, &tmp, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+    convergence = tmp;
+
+  } while ((!convergence) && (iter < maxIter));
+
+  return x;
+}
+
+/**
+   Jacobi iteration sans communications globales
+ **/
+
+double *jacobiIterationV2(double *x, double *xp, double *A, double *b, double eps, int n, int maxIter, int h, int hM) { 
+  
+  // x = vecteur plein, mis à jour à chaque itération
+  // xp = sous-vecteur, que l'on doit envoyer au maitre
+  
+  int i, j, convergence, iter; 
+  double c, d, delta;
+  double *xNew, *xPrev, *xt;
+
+  /* Init du vecteur x : commun à tous les processus */
+  for (i=0;i<n;i++) {
+    x[i] = 1.0;
+  }
+
+  iter = 0;
+  do {
+    iter++;
+    delta = 0.0;
+    
+    
+    /* faire le calcul sur sa partie de la matrice */
+    for (i=0;i< (my_rank==MASTER?hM:h); i++) {
+      c = b[i];
+      
+      int i2 = 
+	(my_rank==MASTER?0:hM) + //décalage de HMaitre 
+	(my_rank==MASTER?0:(my_rank - 1) * h) + 
+	i;
+      
+      for (j=0;j<n;j++) {
+	// pas sûr de la valeur de i: à vérif
+	if (i2 != j) {
+	  c -= A[i * n + j] * x[j];
+	}
+      }
+
+      c /= A[i * n + i2]; // colonne i2
+      
+      // pas sûr de la valeur de i: à vérif
+      d = fabs(x[i2] - c);
+      if (d > delta) delta = d;
+      xp[i] = c;
+    }
+
+    convergence = (delta < eps);
+
+    // On copie notre partie du nouveau vecteur x dans le vecteur global
+    memcpy(x + (my_rank == MASTER? 0 : hM + (my_rank - 1) * h), xp,
+	   sizeof(double) * (my_rank == MASTER?hM:h));
+
+    if (world_size == 1) continue;
+    
+    // Cheat mais pas grave
+    double tmp = 0.0;
+    MPI_Allreduce (&convergence, &tmp, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+    convergence = tmp;
+ 
+    // Premier tour de l'anneau
+    if (my_rank == MASTER) {
+      // On envoie notre vecteur màj.
+      MPI_Send(x, hM, MPI_DOUBLE, my_rank+1, TAG_SUBVECTOR, MPI_COMM_WORLD);
+      // On recoit le nouveau vecteur du dernier processus (world_size - 1) ayant fait le tour de l'anneau 
+      MPI_Recv(x + hM, h * (world_size - 1), MPI_DOUBLE, (world_size - 1), TAG_SUBVECTOR, MPI_COMM_WORLD, &status);
+
+      // Deuxième tour de l'anneau 
+      // Si il y a plus de deux processus alors
+      if (world_size > 2) {
+	// On envoie la partie du vecteur que le voisin n'avait pas reçu. i.e : (my_rank + 2) à (world_size - 1)
+	MPI_Send(x + hM + h, h * (world_size - 2) , MPI_DOUBLE, my_rank + 1, TAG_SUBVECTOR, MPI_COMM_WORLD);
+      }
+    }
+    // Si on est le dernier processus de l'anneau : n - 1
+    else if (my_rank == world_size - 1){
+      // On recoit les vecteurs de 0 à n - 2 que l'on stocke dans x
+      MPI_Recv(x, hM + (world_size - 2) * h, MPI_DOUBLE, my_rank - 1, TAG_SUBVECTOR, MPI_COMM_WORLD, &status);
+      // On envoie au maitre le reste du vecteur de : 1 à n - 1 (il a déjà la première partie)
+      MPI_Send(x + hM, (world_size - 1) * h, MPI_DOUBLE, MASTER, TAG_SUBVECTOR, MPI_COMM_WORLD);
+      // Le dernier proc. a fini et peut recommencer ses calculs
+    }
+    /** Sinon on est un processus lambda (pas le premier, ni le dernier) qui doit recevoir et envoyer
+	deux fois, sauf pour l'avant-dernier qui n'effectuera pas le dernier 
+	envoi */
+    else {
+      // On commence par recevoir de son prédecesseur les données qui ont circulées
+      MPI_Recv(x, hM + (my_rank - 1) * h, MPI_DOUBLE, my_rank - 1, TAG_SUBVECTOR, MPI_COMM_WORLD, &status);
+      // On envoie à son successeur les données reçues précédemment en y ajoutant sa partie
+      MPI_Send(x, hM + my_rank * h, MPI_DOUBLE, my_rank + 1, TAG_SUBVECTOR, MPI_COMM_WORLD);
+      
+      // Deuxième tour de l'anneau
+
+      // On recoit le reste du vecteur dans le deuxième tour de l'anneau. i.e : la partie (my_rank + 1) à (world_size - 1)
+      MPI_Recv(x + hM + my_rank * h, (world_size - (my_rank + 1)) * h, MPI_DOUBLE, my_rank - 1, TAG_SUBVECTOR, MPI_COMM_WORLD, &status);
+
+      // Si nous ne sommes pas l'avant-dernier
+      if (my_rank < world_size - 2){
+	// Alors on envoie la partie qui manque au successeur. i.e : (my_rank + 2) à (world_size - 1)
+	MPI_Send(x + hM + (my_rank + 1) * h, world_size - (my_rank + 2), MPI_DOUBLE, my_rank + 1, TAG_SUBVECTOR, MPI_COMM_WORLD);
+      }
+    }
 
   } while ((!convergence) && (iter < maxIter));
 
@@ -242,8 +349,6 @@ int main(int argc, char *argv[]) {
   double *x_vect, *x_vect_modif;
   double maxAbsRes;
   struct timeval before, after;
-
-  MPI_Status status;
   
   /* Get the argument that indicates the problem size */
   if(argc > 1) {
@@ -339,7 +444,8 @@ int main(int argc, char *argv[]) {
      Time this (interesting) part of the code.
   */
   gettimeofday(&before, NULL);
-  x = jacobiIteration(x_vect, x_vect_modif, A, b, JACOBI_EPS, n, JACOBI_MAX_ITER, h, hM);
+  //x = jacobiIteration(x_vect, x_vect_modif, A, b, JACOBI_EPS, n, JACOBI_MAX_ITER, h, hM);
+  x = jacobiIterationV2(x_vect, x_vect_modif, A, b, JACOBI_EPS, n, JACOBI_MAX_ITER, h, hM);
   gettimeofday(&after, NULL);
   
   /* Compute the residual */
@@ -348,7 +454,7 @@ int main(int argc, char *argv[]) {
   /* Compute the maximum absolute value of the residual */
   maxAbsRes = maxAbsVector(r, my_rank==MASTER?hM:h);
 
-  double tmp_maxAbsRes;
+  double tmp_maxAbsRes = 0.0;
   MPI_Reduce(&maxAbsRes, &tmp_maxAbsRes, 1, MPI_DOUBLE, 
 	     MPI_MAX, MASTER, MPI_COMM_WORLD);
   

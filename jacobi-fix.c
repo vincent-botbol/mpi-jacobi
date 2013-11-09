@@ -17,7 +17,7 @@
 #include <sys/time.h>
 
 /* Some constants */
-#define DEFAULT_PROBLEM_SIZE  1024
+#define DEFAULT_PROBLEM_SIZE  120
 #define JACOBI_EPS            1e-13
 #define JACOBI_MAX_ITER       100
 
