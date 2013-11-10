@@ -6,7 +6,7 @@ CFLAGS=-O3
 
 TARGET=jacobi
 TARGET-fix=jacobi-fix
-HOSTFILE=hostfile
+HOSTFILE=hostfile-sar
 
 all: $(TARGET)
 
@@ -29,4 +29,4 @@ fullrun: $(TARGET)
 	$(RUNNER) -n 12 -hostfile $(HOSTFILE) ./$(TARGET) 67000
 
 clean:
-	rm -f $(TARGET) *~ *.o
+	rm -f $(TARGET-fix) $(TARGET) *~ *.o

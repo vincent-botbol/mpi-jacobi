@@ -42,6 +42,7 @@
 int my_rank;
 int world_size;
 MPI_Status status;
+int strat = 1;
 
 /* Compute time differences in seconds */
 double computeTimeDifferenceInSeconds(struct timeval *before, struct timeval *after) {
@@ -342,6 +343,15 @@ double *jacobiIterationV2(double *x, double *xp, double *A, double *b, double ep
   return x;
 }
 
+void writeData(double temps, int taille){
+  FILE *f = fopen("stats.data", "a");
+
+  char buff[256];
+  sprintf(buff, "%s\t%d\t%d\t%12.6f\n", (strat==0?"glob":"ring"), taille, world_size, temps);
+  fwrite(buff, sizeof(char), strlen(buff), f);
+  fclose(f);  
+}
+
 /* A small testing main program */
 int main(int argc, char *argv[]) {
   int i, n;
@@ -444,8 +454,10 @@ int main(int argc, char *argv[]) {
      Time this (interesting) part of the code.
   */
   gettimeofday(&before, NULL);
-  //x = jacobiIteration(x_vect, x_vect_modif, A, b, JACOBI_EPS, n, JACOBI_MAX_ITER, h, hM);
-  x = jacobiIterationV2(x_vect, x_vect_modif, A, b, JACOBI_EPS, n, JACOBI_MAX_ITER, h, hM);
+  if (strat == 0)
+    x = jacobiIteration(x_vect, x_vect_modif, A, b, JACOBI_EPS, n, JACOBI_MAX_ITER, h, hM);
+  else 
+    x = jacobiIterationV2(x_vect, x_vect_modif, A, b, JACOBI_EPS, n, JACOBI_MAX_ITER, h, hM);
   gettimeofday(&after, NULL);
   
   /* Compute the residual */
@@ -485,6 +497,7 @@ int main(int argc, char *argv[]) {
 
   /* Display time for the Jacobi iteration */
   printf("Computing the solution with Jacobi iteration took %12.6fs\n", computeTimeDifferenceInSeconds(&before, &after));
+  writeData(computeTimeDifferenceInSeconds(&before, &after), n);
 
   // Terminaisons des processus
  free_zone:
@@ -495,8 +508,6 @@ int main(int argc, char *argv[]) {
   free(b);
   free(x_vect);
   free(x_vect_modif);
-  /*  free(xA);
-      free(xB); */
   free(r);
   MPI_Finalize();
   /* Return success */
