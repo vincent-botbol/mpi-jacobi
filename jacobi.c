@@ -42,7 +42,7 @@
 int my_rank;
 int world_size;
 MPI_Status status;
-int strat = 1;
+int strat = 0;
 
 /* Compute time differences in seconds */
 double computeTimeDifferenceInSeconds(struct timeval *before, struct timeval *after) {

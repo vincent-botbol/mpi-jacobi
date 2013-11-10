@@ -30,3 +30,5 @@ fullrun: $(TARGET)
 
 clean:
 	rm -f $(TARGET-fix) $(TARGET) *~ *.o
+
+#for i in 55000 56000 57000 58000 59000 60000 61000 62000 63000 64000 65000 66000 67000; do mpirun -n 12 -hostfile hostfile-sar ./jacobi $i; done
