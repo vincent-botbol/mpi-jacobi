@@ -18,6 +18,8 @@
 #include <mpi.h>
 #include <string.h>
 
+#include <omp.h>
+
 /* Some constants */
 #define DEFAULT_PROBLEM_SIZE  1024
 #define JACOBI_EPS            1e-13
@@ -25,6 +27,8 @@
 
 #define JACOBI_MAX_RESIDUAL   1e-7
 #define DISPLAY_FIRST_ENTRIES 10
+
+/* convention : le maitre est le processus 0 */
 
 #define MASTER 0
 
@@ -34,9 +38,7 @@
 
 /* Tags */
 
-#define TAG_ABS_RES 1<<0
-#define TAG_SUBVECTOR 1<<1
-#define TAG_FULLVECTOR 1<<2
+#define TAG_SUBVECTOR 1<<0
 
 // Global vars
 int my_rank;
@@ -80,6 +82,9 @@ void generateRandomDiagonallyDominantMatrix(double *A, int n, int h, int hM) {
 
   absMax = 0.5 / ((double) n);
 
+#ifdef OMP_STRAT
+#pragma omp parallel for private(j)
+#endif
   for (i=0;i<h;i++) {
     for (j=0;j<n;j++) {
       A[i * n + j] = randomDoubleInDomain(absMax);
@@ -94,6 +99,9 @@ void generateRandomDiagonallyDominantMatrix(double *A, int n, int h, int hM) {
 void generateRandomVector(double *v, int n) {
   int i;
 
+#ifdef OMP_STRAT
+#pragma omp parallel for
+#endif
   for (i=0;i<n;i++) {
     v[i] = randomDoubleInDomain(1024.0);
   }
@@ -108,7 +116,10 @@ void generateRandomVector(double *v, int n) {
 void computeResidual(double *r, double *A, double *x, double *b, int n, int h) {
   int i, j;
   double c;
-  
+
+#ifdef OMP_STRAT
+#pragma omp parallel for private(c, j)
+#endif
   for (i=0;i<h;i++) {
     c = b[i];
     for (j=0;j<n;j++) {
@@ -124,9 +135,14 @@ double maxAbsVector(double *v, int n) {
   double c, res;
 
   res = 0.0;
+#ifdef OMP_STRAT
+#pragma omp parallel for private(c)
+#endif
   for (i=0;i<n;i++) {
     c = fabs(v[i]);
+#pragma omp critical
     if (c > res) res = c;
+    
   }
 
   return res;
@@ -158,42 +174,49 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
   // x = vecteur plein, mis à jour à chaque itération
   // xp = sous-vecteur, que l'on doit envoyer au maitre
   
-  int i, j, convergence, iter; 
+  int i, j, convergence, iter, my_i; 
   double c, d, delta;
-  double *xNew, *xPrev, *xt;
 
   /* Init du vecteur x : commun à tous les processus */
+
+#ifdef OMP_STRAT
+#pragma omp parallel for
+#endif
   for (i=0;i<n;i++) {
     x[i] = 1.0;
   }
 
   iter = 0;
+
   do {
     iter++;
     delta = 0.0;
-    
-    
+      
     /* faire le calcul sur sa partie de la matrice */
-    for (i=0;i< (my_rank==MASTER?hM:h); i++) {
+#ifdef OMP_STRAT
+#pragma omp parallel for shared(delta, xp) private (my_i, j, c, d)
+#endif
+    for (i=0; i< (my_rank==MASTER?hM:h); i++) {
       c = b[i];
       
-      int i2 = 
+      my_i = 
 	(my_rank==MASTER?0:hM) + //décalage de HMaitre 
 	(my_rank==MASTER?0:(my_rank - 1) * h) + 
 	i;
       
       for (j=0;j<n;j++) {
-	// pas sûr de la valeur de i: à vérif
-	if (i2 != j) {
+	if (my_i != j) {
 	  c -= A[i * n + j] * x[j];
 	}
       }
 
-      c /= A[i * n + i2]; // colonne i2
+      c /= A[i * n + my_i];
       
-      // pas sûr de la valeur de i: à vérif
-      d = fabs(x[i2] - c);
+      d = fabs(x[my_i] - c);
+
+#pragma omp critical 
       if (d > delta) delta = d;
+
       xp[i] = c;
     }
 
@@ -236,52 +259,58 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
 
 /**
    Jacobi iteration sans communications globales
- **/
+**/
 
 double *jacobiIterationV2(double *x, double *xp, double *A, double *b, double eps, int n, int maxIter, int h, int hM) { 
   
   // x = vecteur plein, mis à jour à chaque itération
   // xp = sous-vecteur, que l'on doit envoyer au maitre
   
-  int i, j, convergence, iter; 
+  int i, j, convergence, iter, my_i; 
   double c, d, delta;
-  double *xNew, *xPrev, *xt;
 
   /* Init du vecteur x : commun à tous les processus */
+#ifdef OMP_STRAT
+#pragma omp parallel for
+#endif
   for (i=0;i<n;i++) {
     x[i] = 1.0;
   }
-
+  
   iter = 0;
+  
   do {
     iter++;
     delta = 0.0;
     
-    
     /* faire le calcul sur sa partie de la matrice */
-    for (i=0;i< (my_rank==MASTER?hM:h); i++) {
+#ifdef OMP_STRAT
+#pragma omp parallel for shared(delta) private(my_i, j, c, d)
+#endif
+    for (i=0; i< (my_rank==MASTER?hM:h); i++) {
       c = b[i];
       
-      int i2 = 
+      my_i = 
 	(my_rank==MASTER?0:hM) + //décalage de HMaitre 
 	(my_rank==MASTER?0:(my_rank - 1) * h) + 
 	i;
       
       for (j=0;j<n;j++) {
-	// pas sûr de la valeur de i: à vérif
-	if (i2 != j) {
+	if (my_i != j) {
 	  c -= A[i * n + j] * x[j];
 	}
       }
 
-      c /= A[i * n + i2]; // colonne i2
+      c /= A[i * n + my_i];
       
-      // pas sûr de la valeur de i: à vérif
-      d = fabs(x[i2] - c);
+      d = fabs(x[my_i] - c);
+
+#pragma omp critical 
       if (d > delta) delta = d;
+
       xp[i] = c;
     }
-
+    
     convergence = (delta < eps);
 
     // On copie notre partie du nouveau vecteur x dans le vecteur global
@@ -337,8 +366,8 @@ double *jacobiIterationV2(double *x, double *xp, double *A, double *b, double ep
 	MPI_Send(x + hM + (my_rank + 1) * h, world_size - (my_rank + 2), MPI_DOUBLE, my_rank + 1, TAG_SUBVECTOR, MPI_COMM_WORLD);
       }
     }
-
   } while ((!convergence) && (iter < maxIter));
+  
 
   return x;
 }
@@ -392,7 +421,7 @@ int main(int argc, char *argv[]) {
   
   /* Allocation des blocs de la matrice pour chaque processus (taille : h * n)  
      -modifié-
-   */
+  */
   if ((A = (double *) calloc(h * n, sizeof(double))) == NULL) {
     fprintf(stderr, "Not enough memory.\n");
     MPI_Finalize();
@@ -401,7 +430,7 @@ int main(int argc, char *argv[]) {
 
   /* sous-vecteur résultat pour chaque processus 
      -modifié-
-   */
+  */
   if ((b = (double *) calloc(h, sizeof(double))) == NULL) {
     free(A);
     fprintf(stderr, "Not enough memory.\n");

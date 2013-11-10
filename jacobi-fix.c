@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
+#include <string.h>
 
 /* Some constants */
 #define DEFAULT_PROBLEM_SIZE  120
@@ -157,6 +158,15 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
   } while ((!convergence) && (iter < maxIter));
 
   return xPrev;
+}
+
+void writeData(double temps, int taille){
+  FILE *f = fopen("stats.data", "a");
+
+  char buff[256];
+  sprintf(buff, "%s\t%d\t%d\t%12.6f\n", "fix", taille, 1, temps);
+  fwrite(buff, sizeof(char), strlen(buff), f);
+  fclose(f);  
 }
 
 /* A small testing main program */
