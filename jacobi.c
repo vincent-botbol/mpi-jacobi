@@ -140,7 +140,9 @@ double maxAbsVector(double *v, int n) {
 #endif
   for (i=0;i<n;i++) {
     c = fabs(v[i]);
+#ifdef OMP_STRAT
 #pragma omp critical
+#endif
     if (c > res) res = c;
     
   }
@@ -214,7 +216,9 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
       
       d = fabs(x[my_i] - c);
 
+#ifdef OMP_STRAT
 #pragma omp critical 
+#endif
       if (d > delta) delta = d;
 
       xp[i] = c;
@@ -231,6 +235,7 @@ double *jacobiIteration(double *x, double *xp, double *A, double *b, double eps,
 	int id_source = status.MPI_SOURCE;
 	/* vecteur + décalage du bout du maitre + (rank - 1 (puisqu'on
 	   a inclut le maitre)) * taille bout esclave */
+
 	MPI_Recv(x + hM + (id_source - 1) * h,
 		 h, MPI_DOUBLE, 
 		 id_source, TAG_SUBVECTOR, MPI_COMM_WORLD, &status);

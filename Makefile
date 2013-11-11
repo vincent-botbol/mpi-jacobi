@@ -14,6 +14,12 @@ PDFSRC=rapport_PPAR_Botbol_Bismuth.tex
 
 all: $(TARGET) $(PDFTARGET)
 
+exec: $(TARGET)
+	$(RUNNER) -n 12 -hostfile $(HOSTFILE) ./$(TARGET) 67000
+
+clean:
+	rm -f $(TARGET-fix) $(TARGET) *~ *.o *.out *.snm *.log *.aux *.nav *.toc $(PDFTARGET)
+
 $(TARGET) : $(TARGET).c
 	$(MPICC) $(CFLAGS) -o $@ $<
 
@@ -31,14 +37,6 @@ run: $(TARGET)
 
 run-par: $(TARGET)
 	$(RUNNER) -n 12 -hostfile $(HOSTFILE) ./$(TARGET)
-
-fullrun: $(TARGET)
-	$(RUNNER) -n 12 -hostfile $(HOSTFILE) ./$(TARGET) 67000
-
-clean:
-	rm -f $(TARGET-fix) $(TARGET) *~ *.o *.out *.snm *.log *.aux *.nav *.toc $(PDFTARGET)
-
-#for i in 55000 56000 57000 58000 59000 60000 61000 62000 63000 64000 65000 66000 67000; do mpirun -n 12 -hostfile hostfile-sar ./jacobi $i; done
 
 show: $(PDFTARGET)
 	evince $<

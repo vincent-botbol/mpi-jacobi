@@ -1,0 +1,207 @@
+\documentclass[11pt,a4paper]{report}
+
+\usepackage[utf8]{inputenc}
+\usepackage[frenchb]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{fullpage}
+
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage[linesnumbered,lined,boxed,french]{algorithm2e}
+
+\title{Rapport de projet -- PPAR}
+\author{Vincent Botbol(2900741), Yohan Bismuth(2902294)}
+\date\today
+
+\begin{document}
+
+\maketitle
+
+\chapter{Préambule}
+
+% Ce qu'on a fait, ce qu'on a pas fait
+Le projet a été complété. Il comporte notamment : une implémentation
+utilisant les routines de communications globales, une implémentation
+sans communication globales et une extension de programmation hybride
+\emph{OpenMP} + \emph{MPI}. Nous avons utilisé la salle 201 pour
+effectuer nos tests sur des matrices de taille $67000 x 67000$.  Deux
+des ordinateurs possédant seulement 2go de mémoire vive, nous les
+avons otés de notre ``hostfile''\footnote{Les noeuds ARI-31-201-03 et
+  11}.
+
+
+\chapter{Questions}
+
+\section{Que devient la condition de terminaison de l’itération de Jacobi en parallèle ?}
+
+L'implémentation divise la matrice en plusieurs sous-matrices de
+taille $h x n$, où h est la hauteur d'une sous-matrice et n la taille
+initiale. Chaque processus devra alors annoncer si il a réussi à
+converger (ou non) aux autres processus. Ainsi, il est nécessaire de
+transmettre globalement la valeur du booléen \emph{convergence} et
+d'effectuer un ``et logique'' entre toutes ces valeurs qui sera
+finalement la véritable condition de terminaison de la boucle.
+
+Il y a également le test basé sur le nombre d'itérations mais qui, ne
+soulevant pas de problèmes de parallèlisation, ne sera pas développé
+ici.
+
+\section{Description de l'algorithme basé sur les communications collectives}
+
+Voici le pseudo-code décrivant notre algorithme :
+
+\begin{algorithm}[H]
+  \KwData{$A \in \mathbb{R}^{h \times n}$ une matrice où h est la hauteur de la
+    sous-matrice d'un processus,\\%
+    $b \in \mathbb{R}^{h}$ un vecteur de droite connu,\\%
+    $\epsilon \in \mathbb{R}^{+}$ une constante de test de convergence
+  }
+  \KwResult{Un vecteur $x \in \in \mathbb{R}^n$ résolvant $Ax = b$ approximativement}
+  \Begin{
+      $\delta \gets 0$\;
+      \For{$i = 1,...,n$}{$x_i \gets 1.0$}
+      \Repeat{$conv' = vrai$}
+             {
+               \For{$i = 1,...,h$}{
+                 $c \gets b_i$\;
+                 $i' \gets i + rang \times h$\;
+                 \For{$j = 1, ..., n$}{
+                   \If{$i' \neq j$}{$c \gets c - a_{ij} \cdot x_j$}
+                 }
+                 $c \gets \frac{c}{a_{ii'}}$\;
+                 $\delta \gets max(\delta,\mid{}x_{i'} - c\mid{})$\;
+                 $x'_{i'} \gets c$\;
+               }
+               \eIf{$rang = master$}
+                   {
+                     $x_{\oplus 0} \gets x'$\;
+                     \For{$i = 1,...,nb\_proc$}
+                         {
+                           MPI\_Probe(MPI\_ANY\_SOURCE, ..., \&status)\;
+                           $dec \gets h \times status.MPI\_SOURCE$\;
+                           MPI\_Recv($x_{\oplus dec}$, h, ...)\;
+                         }
+                   }
+                   {
+                     MPI\_Send($x'$, h, MPI\_DOUBLE, master, ...)\;
+                   }
+                   MPI\_Bcast($x$, n, MPI\_DOUBLE, master, ...)\;
+                   $conv \gets \delta < \epsilon$\;
+                   MPI\_Allreduce($\&conv$, $\&conv'$, MPI\_INT, MPI\_LAND, ...)\;
+             }
+    }
+\caption{Communications collectives}
+\end{algorithm}
+
+\begin{itemize}
+\item La variable $i'$ représente l'indice $i$ de l'algorithme
+  séquentiel.
+\item La variable $x'$ représente le sous-vecteur de taille h que
+  chaque processus modifie puis envoie au maître pour mettre à jour le
+  vecteur x.
+\item $dec$ représente le décalage d'adresse mémoire nécessaire.
+\item $conv$ est le booléen vérifiant la convergence.
+\end{itemize}
+
+La notation $x_{\oplus dec}$ représente l'addresse mémoire $x$ décalé de
+$dec$ éléments.
+
+L'implémentation effective comprend des hauteurs dites du ``maître''
+qui seront possiblement moins grandes que les hauteurs des autres
+processus si le nombre de processus ne divise pas n. Nous assurons
+ainsi un traitement correct de l'algorithme pour ce cas.  C'est la
+raison pour laquelle nous n'avons pas utilisé de MPI\_Gather pour
+récupérer les sous-vecteurs $x'$.
+
+
+\section{Description de l'algorithme sans communications collectives}
+
+Le pseudo-code de l'algorithme ne comprendra pas la première partie qui
+ne diffère pas de l'algorithme précédent. Ici, nous nous intéresserons
+seulement à la phase de communication.
+
+Avant de donner le pseudo-code, nous allons décrire la méthode
+utilisée.  Notre implémentation se base sur une stratégie de
+communication en anneau. Le but étant de distribuer le nouveau vecteur
+x à tous les processus.
+
+En parcourant l'anneau, chaque processus va envoyer, au processus
+suivant, sa partie de vecteur qu'il vient de calculer plus le
+sous-vecteur qu'il vient de recevoir de son prédecesseur. Au bout du
+premier tour de l'anneau, le dernier processus de la chaine possédera
+la totalité du vecteur x. Il est cependant nécessaire d'effectuer un
+deuxième tour de l'anneau pour communiquer aux processus restants les
+ensembles du vecteur qu'ils n'ont pas eu.
+
+Par exemple, considérons 4 processus :
+Au premier tour de l'anneau:
+\begin{enumerate}
+\item $P0 \overset{x_0}\longrightarrow P1$
+\item $P1 \overset{x_{0..1}}\longrightarrow P2$
+\item $P2 \overset{x_{0..2}}\longrightarrow P3$
+\end{enumerate}
+Puis au deuxième tour:
+\begin{enumerate}
+\item $P3 \overset{x_{1..3}}\longrightarrow P0$
+\item $P0 \overset{x_{2..3}}\longrightarrow P1$
+\item $P1 \overset{x_{3}}\longrightarrow P2$
+\end{enumerate}
+A la fin de ces deux tours, tous les processus auront le vecteur x
+mis-à-jour dans sa totalité sans avoir effectué de communications
+inutiles.
+
+\begin{algorithm}[H]
+  \Begin{
+      ...
+      \Repeat{$conv' = vrai$}
+             {
+               ...
+               $x_{\oplus rang \times h} \gets x'$\;
+               \uIf{$rang = master$}{
+                 MPI\_Send($x_{\oplus 0}$, $h$, MPI\_DOUBLE, $rang + 1$, ...)\;
+                 MPI\_Recv($x_{\oplus h}$, $h \times (nb\_proc - 1)$, $rang - 1$, ...)\;
+                 \If{$nb\_proc > 2$}
+                    {
+                      MPI\_Send($x + 2 \times h$, $h \times (nb\_proc - 2)$ , 
+                      MPI\_DOUBLE, $rang + 1$, ...)\;                       
+                    }
+               }
+               \uElseIf{$rang = nb\_proc - 1$}{
+                 MPI\_Recv($x_{\oplus 0}$, $h \times (nb\_proc - 1)$, $rang - 1$, ...)\;
+                 MPI\_Send($x_{\oplus h}$, $h \times (nb\_proc - 1)$, MPI\_DOUBLE, $rang + 1$, ...)\;
+               }
+               \Else{
+                 MPI\_Recv($x_{\oplus 0}$, $h \times rang$, $rang - 1$, ...)\;
+                 MPI\_Send($x_{\oplus 0}$, $h \times (rang + 1)$, MPI\_DOUBLE, $rang + 1$, ...)\;
+                 MPI\_Recv($x_{\oplus (rang+1) * h}$, $h \times (nb\_proc - (rang + 1))$, $rang - 1$, ...)\;
+                 \If{$rang < (nb\_proc - 2)$}{               
+                   MPI\_Send($x_{\oplus (rang+1) \times h}$, $h \times (nb\_proc - (rang + 1))$, $rang - 1$, ...)\;
+                 }
+               }
+             }
+    }
+\caption{Anneau de communication}
+\end{algorithm}
+
+notes : 
+on s'abstrait des calculs de modulos et on suppose que $rang_0 - 1  = rang_{n-1}$
+
+Au niveau des performances, en comparant à l'algorithme utilisant les
+communications collectives, nous avons pu constaté une baisse de
+performance d'environ 20\% en moyenne. Nous pouvons l'expliquer par le
+délai qu'un processus subit lors de l'attente du ``jeton''
+ralentissant alors la chaîne.
+
+\chapter{Tests}
+
+
+% choix, implementations, résultats, conclusions OK
+% tests de perf : temps de calculs + accelerations / effacité
+% Tests sur diff nombre de proc
+% Temps de calcul moyen sur 12 procs matrice 67000
+
+
+\end{document}
